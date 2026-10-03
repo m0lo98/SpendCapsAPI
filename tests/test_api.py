@@ -129,9 +129,11 @@ def test_validation(env):
     assert create(client, amount=-1).status_code == 422
     assert create(client, currency_code="pln").status_code == 422
     assert create(client, amount="1.999").status_code == 422
+    assert create(client, amount="1e30").status_code == 422
     assert create(client, project_id="Acme prod").status_code == 422
     assert client.get(f"{BASE}/bad.id").status_code == 422
     assert client.patch(f"{BASE}/b1", json={"amount": "1.999"}).status_code == 422
+    assert client.patch(f"{BASE}/b1", json={"amount": "1e30"}).status_code == 422
 
 
 def test_health(env):

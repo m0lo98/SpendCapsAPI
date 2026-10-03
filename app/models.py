@@ -1,5 +1,6 @@
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated
 
 from pydantic import BaseModel, Field
 
@@ -18,17 +19,20 @@ SERVICE_IDS = {
     Service.vertex_ai: "C7E2-9256-1C43",
 }
 
+MAX_MONEY_UNITS = 2**63 - 1
+Amount = Annotated[Decimal, Field(ge=0, le=MAX_MONEY_UNITS, decimal_places=2)]
+
 
 class SpendCapCreate(BaseModel):
     project_id: str = Field(pattern=r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
     service: Service
-    amount: Decimal = Field(ge=0, decimal_places=2)
+    amount: Amount
     currency_code: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     display_name: str | None = Field(default=None, max_length=60)
 
 
 class SpendCapUpdate(BaseModel):
-    amount: Decimal = Field(ge=0, decimal_places=2)
+    amount: Amount
 
 
 class SpendCap(BaseModel):
