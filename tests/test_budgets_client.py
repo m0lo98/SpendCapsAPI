@@ -52,6 +52,12 @@ def test_list_merges_incomplete_passes():
     assert len(session.calls) == LIST_PASSES
 
 
+def test_list_runs_requested_number_of_passes():
+    session = FakeSession([FakeResponse(200, {})] * 8)
+    assert list(BudgetsClient(session).list("BA", passes=8)) == []
+    assert len(session.calls) == 8
+
+
 def test_patch_sends_body_without_update_mask():
     session = FakeSession([FakeResponse(200, {"name": "n"})])
     BudgetsClient(session).patch("billingAccounts/BA/budgets/1", {"x": 1})

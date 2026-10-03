@@ -1,10 +1,11 @@
 from decimal import Decimal
 
-from app.budgets_client import BudgetApiError, BudgetsClient
+from app.budgets_client import LIST_PASSES, BudgetApiError, BudgetsClient
 from app.models import SERVICE_IDS, SpendCap, SpendCapCreate, SpendCapUpdate
 
 SERVICES_BY_ID = {service_id: service for service, service_id in SERVICE_IDS.items()}
 SPEND_CAP_THRESHOLDS = [0.5, 0.8, 1.0]
+DUPLICATE_LOOKUP_PASSES = 8
 
 
 class SpendCapError(Exception):
@@ -62,15 +63,24 @@ class SpendCapService:
             raise SpendCapError(404, f"Budget {budget_id} is not a spend cap budget")
         return budget
 
-    def _ensure_no_cap_for(self, billing_account_id: str, project: str, service: str) -> None:
-        for budget in self.budgets.list(billing_account_id, project=project):
+    def _find_cap_for(
+        self, billing_account_id: str, project: str, service: str, passes: int = LIST_PASSES
+    ) -> dict | None:
+        for budget in self.budgets.list(billing_account_id, project=project, passes=passes):
             if "spendCap" in budget and service in budget.get("budgetFilter", {}).get("services", []):
-                raise SpendCapError(409, f"{project} already has a spend cap for {service}: {budget['name']}")
+                return budget
+        return None
+
+    @staticmethod
+    def _duplicate_error(project: str, service: str, existing: dict) -> SpendCapError:
+        return SpendCapError(409, f"{project} already has a spend cap for {service}: {existing['name']}")
 
     def create(self, billing_account_id: str, req: SpendCapCreate) -> SpendCap:
         project = f"projects/{req.project_id}"
         service = f"services/{SERVICE_IDS[req.service]}"
-        self._ensure_no_cap_for(billing_account_id, project, service)
+        existing = self._find_cap_for(billing_account_id, project, service)
+        if existing:
+            raise self._duplicate_error(project, service, existing)
         budget = {
             "displayName": req.display_name or f"spend-cap-{req.project_id}-{req.service.value}"[:60],
             "budgetFilter": {
@@ -85,7 +95,17 @@ class SpendCapService:
             "spendCap": {"inputState": "CONFIGURED"},
             "ownershipScope": "ALL_USERS",
         }
-        return _to_spend_cap(self.budgets.create(billing_account_id, budget))
+        try:
+            created = self.budgets.create(billing_account_id, budget)
+        except BudgetApiError as exc:
+            # GCP rejects a second cap for the same project and service with a bare 400 INVALID_ARGUMENT.
+            if exc.status_code != 400:
+                raise
+            existing = self._find_cap_for(billing_account_id, project, service, passes=DUPLICATE_LOOKUP_PASSES)
+            if existing is None:
+                raise
+            raise self._duplicate_error(project, service, existing) from exc
+        return _to_spend_cap(created)
 
     def list_all(self, billing_account_id: str) -> list[SpendCap]:
         return [_to_spend_cap(b) for b in self.budgets.list(billing_account_id) if "spendCap" in b]
