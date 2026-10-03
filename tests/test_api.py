@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.budgets_client import BudgetApiError
 from app.main import app, get_service
-from app.service import SpendCapService
+from app.service import DELETE_ATTEMPTS, DUPLICATE_LOOKUP_PASSES, SpendCapService
 from tests.test_audit import id_token
 
 BA = "012345-6789AB-CDEF01"
@@ -19,8 +19,13 @@ class FakeBudgets:
         self.store: dict[str, dict] = {}
         self.patches: list[tuple[str, dict]] = []
         self.seq = 0
+        self.list_passes: list[int | None] = []
 
     def create(self, billing_account_id, budget):
+        if "spendCap" in budget and any(
+            "spendCap" in b and b["budgetFilter"] == budget["budgetFilter"] for b in self.store.values()
+        ):
+            raise BudgetApiError(400, "Request contains an invalid argument.", "INVALID_ARGUMENT")
         self.seq += 1
         b = copy.deepcopy(budget)
         b["name"] = f"billingAccounts/{billing_account_id}/budgets/b{self.seq}"
@@ -32,7 +37,8 @@ class FakeBudgets:
         self.store[b["name"]] = b
         return b
 
-    def list(self, billing_account_id, project=None):
+    def list(self, billing_account_id, project=None, passes=None):
+        self.list_passes.append(passes)
         prefix = f"billingAccounts/{billing_account_id}/"
         return [
             b
@@ -113,6 +119,30 @@ def test_create_duplicate_for_same_service_conflicts(env):
     assert create(client, service="gemini-api").status_code == 201
 
 
+def test_create_duplicate_missed_by_list_conflicts(env):
+    client, budgets = env
+    existing = create(client).json()
+    real_list = budgets.list
+    misses = iter([True])
+    budgets.list = lambda *args, **kwargs: [] if next(misses, False) else real_list(*args, **kwargs)
+    r = create(client)
+    assert r.status_code == 409
+    assert existing["name"] in r.json()["detail"]
+    assert budgets.list_passes[-1] == DUPLICATE_LOOKUP_PASSES
+
+
+def test_create_invalid_argument_without_duplicate_is_passed_through(env):
+    client, budgets = env
+
+    def reject(*_args, **_kwargs):
+        raise BudgetApiError(400, "Request contains an invalid argument.", "INVALID_ARGUMENT")
+
+    budgets.create = reject
+    r = create(client)
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Request contains an invalid argument."
+
+
 def test_create_ignores_regular_budget_on_same_project(env):
     client, budgets = env
     budgets.store[f"billingAccounts/{BA}/budgets/plain"] = {
@@ -175,6 +205,51 @@ def test_get_and_delete(env):
     assert client.get(f"{BASE}/{created['id']}").json()["id"] == created["id"]
     assert client.delete(f"{BASE}/{created['id']}").status_code == 204
     assert client.get(f"{BASE}/{created['id']}").status_code == 404
+
+
+def ignore_deletes(budgets, times):
+    real_delete = budgets.delete
+    calls = []
+
+    def delete(name):
+        calls.append(name)
+        if len(calls) > times:
+            real_delete(name)
+
+    budgets.delete = delete
+    return calls
+
+
+def test_delete_is_retried_until_the_cap_is_gone(env):
+    client, budgets = env
+    created = create(client).json()
+    calls = ignore_deletes(budgets, times=1)
+    assert client.delete(f"{BASE}/{created['id']}").status_code == 204
+    assert len(calls) == 2
+    assert created["name"] not in budgets.store
+
+
+def test_delete_that_never_takes_effect_fails(env):
+    client, budgets = env
+    created = create(client).json()
+    calls = ignore_deletes(budgets, times=DELETE_ATTEMPTS)
+    r = client.delete(f"{BASE}/{created['id']}")
+    assert r.status_code == 502
+    assert "still exists" in r.json()["detail"]
+    assert len(calls) == DELETE_ATTEMPTS
+    assert created["name"] in budgets.store
+
+
+def test_delete_not_found_counts_as_deleted_when_cap_is_gone(env):
+    client, budgets = env
+    created = create(client).json()
+
+    def delete_then_not_found(name):
+        budgets.store.pop(name)
+        raise BudgetApiError(404, "Budget not found")
+
+    budgets.delete = delete_then_not_found
+    assert client.delete(f"{BASE}/{created['id']}").status_code == 204
 
 
 def test_regular_budget_is_not_exposed(env):

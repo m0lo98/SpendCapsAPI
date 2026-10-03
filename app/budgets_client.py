@@ -61,10 +61,10 @@ class BudgetsClient:
     def create(self, billing_account_id: str, budget: dict) -> dict:
         return self._call("POST", f"billingAccounts/{billing_account_id}/budgets", json=budget)
 
-    def list(self, billing_account_id: str, project: str | None = None) -> Iterator[dict]:
+    def list(self, billing_account_id: str, project: str | None = None, passes: int = LIST_PASSES) -> Iterator[dict]:
         # Spend cap budgets (Preview) are intermittently missing from list results, so merge several passes.
         seen = set()
-        for _ in range(LIST_PASSES):
+        for _ in range(passes):
             for budget in self._list_once(billing_account_id, project):
                 if budget["name"] not in seen:
                     seen.add(budget["name"])
