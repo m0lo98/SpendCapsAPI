@@ -38,12 +38,10 @@ class SpendCap(BaseModel):
 class PubSubMessage(BaseModel):
     data: str
     attributes: dict[str, str] = {}
-    messageId: str | None = None
 
 
 class PubSubPush(BaseModel):
     message: PubSubMessage
-    subscription: str | None = None
 
 
 class EnforcementResult(BaseModel):

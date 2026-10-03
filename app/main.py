@@ -46,7 +46,7 @@ def create_spend_cap(billing_account_id: BillingAccountId, body: SpendCapCreate,
 
 @app.get("/v1/billing-accounts/{billing_account_id}/spend-caps")
 def list_spend_caps(billing_account_id: BillingAccountId, svc: Service) -> list[SpendCap]:
-    return svc.list(billing_account_id)
+    return svc.list_all(billing_account_id)
 
 
 @app.get("/v1/billing-accounts/{billing_account_id}/spend-caps/{budget_id}")

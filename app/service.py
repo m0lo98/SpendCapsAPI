@@ -83,19 +83,16 @@ class SpendCapService:
             enforced=self._is_enforced(budget),
         )
 
-    def create(self, billing_account_id: str, req: SpendCapCreate) -> SpendCap:
-        existing = list(
-            self.budgets.list_budgets(
-                request=budgets_v1.ListBudgetsRequest(
-                    parent=f"billingAccounts/{billing_account_id}",
-                    scope=f"projects/{req.project_id}",
-                )
-            )
+    def _ensure_no_budget_for_project(self, billing_account_id: str, project_id: str) -> None:
+        request = budgets_v1.ListBudgetsRequest(
+            parent=f"billingAccounts/{billing_account_id}", scope=f"projects/{project_id}"
         )
+        existing = next(iter(self.budgets.list_budgets(request=request)), None)
         if existing:
-            raise SpendCapError(
-                409, f"Project {req.project_id} already has a budget: {existing[0].name}"
-            )
+            raise SpendCapError(409, f"Project {project_id} already has a budget: {existing.name}")
+
+    def create(self, billing_account_id: str, req: SpendCapCreate) -> SpendCap:
+        self._ensure_no_budget_for_project(billing_account_id, req.project_id)
 
         budget = budgets_v1.Budget(
             display_name=req.display_name or f"spend-cap-{req.project_id}"[:60],
@@ -110,7 +107,7 @@ class SpendCapService:
         created = self.budgets.create_budget(parent=f"billingAccounts/{billing_account_id}", budget=budget)
         return self._to_spend_cap(created)
 
-    def list(self, billing_account_id: str) -> list[SpendCap]:
+    def list_all(self, billing_account_id: str) -> list[SpendCap]:
         return [self._to_spend_cap(b) for b in self.budgets.list_budgets(parent=f"billingAccounts/{billing_account_id}")]
 
     def get(self, billing_account_id: str, budget_id: str) -> SpendCap:
@@ -138,7 +135,8 @@ class SpendCapService:
     def delete(self, billing_account_id: str, budget_id: str) -> None:
         self.budgets.delete_budget(name=self._budget_name(billing_account_id, budget_id))
 
-    def handle_notification(self, push: PubSubPush) -> EnforcementResult:
+    @staticmethod
+    def _parse_notification(push: PubSubPush) -> tuple[str, str, Decimal, Decimal]:
         attrs = push.message.attributes
         billing_account_id = attrs.get("billingAccountId")
         budget_id = attrs.get("budgetId")
@@ -150,7 +148,21 @@ class SpendCapService:
             limit = Decimal(str(payload["budgetAmount"]))
         except (ValueError, KeyError, TypeError) as e:
             raise SpendCapError(400, f"Invalid budget notification payload: {e}") from e
+        return billing_account_id, budget_id, cost, limit
 
+    def _disable_billing(self, billing_account_id: str, projects: list[str]) -> list[str]:
+        disabled = []
+        for project in projects:
+            info = self.billing.get_project_billing_info(name=project)
+            if info.billing_enabled and info.billing_account_name == f"billingAccounts/{billing_account_id}":
+                self.billing.update_project_billing_info(
+                    name=project, project_billing_info=billing_v1.ProjectBillingInfo(billing_account_name="")
+                )
+                disabled.append(project)
+        return disabled
+
+    def handle_notification(self, push: PubSubPush) -> EnforcementResult:
+        billing_account_id, budget_id, cost, limit = self._parse_notification(push)
         if cost < limit:
             return EnforcementResult(budget_id=budget_id, exceeded=False)
 
@@ -158,12 +170,5 @@ class SpendCapService:
         if not self._is_enforced(budget):
             return EnforcementResult(budget_id=budget_id, exceeded=True)
 
-        disabled = []
-        for project in budget.budget_filter.projects:
-            info = self.billing.get_project_billing_info(name=project)
-            if info.billing_enabled and info.billing_account_name == f"billingAccounts/{billing_account_id}":
-                self.billing.update_project_billing_info(
-                    name=project, project_billing_info=billing_v1.ProjectBillingInfo(billing_account_name="")
-                )
-                disabled.append(project)
+        disabled = self._disable_billing(billing_account_id, list(budget.budget_filter.projects))
         return EnforcementResult(budget_id=budget_id, exceeded=True, disabled_projects=disabled)
