@@ -5,7 +5,9 @@ import google.auth
 from google.auth.transport.requests import AuthorizedSession
 
 API_ROOT = "https://billingbudgets.googleapis.com/v1"
-NOT_FOUND_RETRIES = 5
+MAX_ATTEMPTS = 5
+REQUEST_TIMEOUT = 30
+SERVER_ERRORS = {500, 502, 503, 504}
 
 
 class BudgetApiError(Exception):
@@ -22,11 +24,18 @@ class BudgetsClient:
             session = AuthorizedSession(credentials)
         self.session = session
 
+    @staticmethod
+    def _is_transient(method: str, status_code: int) -> bool:
+        if status_code == 429:
+            return True
+        # Spend cap budgets (Preview) intermittently return 404 for existing budgets.
+        # POST is not retried: a failed response does not prove the budget was not created.
+        return method != "POST" and (status_code == 404 or status_code in SERVER_ERRORS)
+
     def _call(self, method: str, path: str, **kwargs) -> dict:
-        for attempt in range(NOT_FOUND_RETRIES):
-            response = self.session.request(method, f"{API_ROOT}/{path}", **kwargs)
-            # Spend cap budgets (Preview) intermittently return 404 for existing budgets.
-            if response.status_code != 404 or method == "POST" or attempt == NOT_FOUND_RETRIES - 1:
+        for attempt in range(MAX_ATTEMPTS):
+            response = self.session.request(method, f"{API_ROOT}/{path}", timeout=REQUEST_TIMEOUT, **kwargs)
+            if not self._is_transient(method, response.status_code) or attempt == MAX_ATTEMPTS - 1:
                 break
             time.sleep(1)
         if response.status_code >= 400:

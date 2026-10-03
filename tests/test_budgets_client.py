@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.budgets_client import API_ROOT, NOT_FOUND_RETRIES, BudgetApiError, BudgetsClient
+from app.budgets_client import API_ROOT, MAX_ATTEMPTS, REQUEST_TIMEOUT, BudgetApiError, BudgetsClient
 
 
 class FakeResponse:
@@ -44,7 +44,7 @@ def test_patch_sends_body_without_update_mask():
     BudgetsClient(session).patch("billingAccounts/BA/budgets/1", {"x": 1})
     method, url, kwargs = session.calls[0]
     assert (method, url) == ("PATCH", f"{API_ROOT}/billingAccounts/BA/budgets/1")
-    assert kwargs == {"json": {"x": 1}}
+    assert kwargs == {"json": {"x": 1}, "timeout": REQUEST_TIMEOUT}
 
 
 def test_intermittent_not_found_is_retried(monkeypatch):
@@ -56,11 +56,31 @@ def test_intermittent_not_found_is_retried(monkeypatch):
 
 def test_persistent_not_found_is_raised(monkeypatch):
     monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
-    session = FakeSession([FakeResponse(404, {"error": {"message": "nf"}})] * NOT_FOUND_RETRIES)
+    session = FakeSession([FakeResponse(404, {"error": {"message": "nf"}})] * MAX_ATTEMPTS)
     with pytest.raises(BudgetApiError) as exc:
         BudgetsClient(session).get("billingAccounts/BA/budgets/1")
     assert exc.value.status_code == 404
-    assert len(session.calls) == NOT_FOUND_RETRIES
+    assert len(session.calls) == MAX_ATTEMPTS
+
+
+@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_transient_errors_are_retried(monkeypatch, method, status):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FakeSession([FakeResponse(status, {"error": {"message": "busy"}}), FakeResponse(200, {"name": "n"})])
+    assert BudgetsClient(session)._call(method, "billingAccounts/BA/budgets/1") == {"name": "n"}
+    assert len(session.calls) == 2
+
+
+def test_create_is_retried_only_on_rate_limit(monkeypatch):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FakeSession([FakeResponse(429, {"error": {"message": "slow down"}}), FakeResponse(200, {"name": "n"})])
+    assert BudgetsClient(session).create("BA", {}) == {"name": "n"}
+    for status in (404, 500, 503):
+        session = FakeSession([FakeResponse(status, {"error": {"message": "x"}})])
+        with pytest.raises(BudgetApiError):
+            BudgetsClient(session).create("BA", {})
+        assert len(session.calls) == 1
 
 
 def test_delete_with_empty_body():
