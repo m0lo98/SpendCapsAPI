@@ -1,10 +1,10 @@
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class Service(str, Enum):
+class Service(StrEnum):
     cloud_run = "cloud-run"
     cloud_run_functions = "cloud-run-functions"
     gemini_api = "gemini-api"

@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from app.budgets_client import BudgetsClient
-from app.models import SERVICE_IDS, Service, SpendCap, SpendCapCreate, SpendCapUpdate
+from app.models import SERVICE_IDS, SpendCap, SpendCapCreate, SpendCapUpdate
 
 SERVICES_BY_ID = {service_id: service for service, service_id in SERVICE_IDS.items()}
 SPEND_CAP_THRESHOLDS = [0.5, 0.8, 1.0]
@@ -80,9 +80,7 @@ class SpendCapService:
                 "calendarPeriod": "MONTH",
             },
             "amount": {"specifiedAmount": _to_money(req.amount, req.currency_code)},
-            "thresholdRules": [
-                {"thresholdPercent": t, "spendBasis": "CURRENT_SPEND"} for t in SPEND_CAP_THRESHOLDS
-            ],
+            "thresholdRules": [{"thresholdPercent": t, "spendBasis": "CURRENT_SPEND"} for t in SPEND_CAP_THRESHOLDS],
             "notificationsRule": {"enableProjectLevelRecipients": True},
             "spendCap": {"inputState": "CONFIGURED"},
         }
