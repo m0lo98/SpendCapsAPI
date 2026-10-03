@@ -2,6 +2,7 @@ import time
 from collections.abc import Iterator
 
 import google.auth
+import requests
 from google.auth.transport.requests import AuthorizedSession
 
 API_ROOT = "https://billingbudgets.googleapis.com/v1"
@@ -35,8 +36,16 @@ class BudgetsClient:
 
     def _call(self, method: str, path: str, **kwargs) -> dict:
         for attempt in range(MAX_ATTEMPTS):
-            response = self.session.request(method, f"{API_ROOT}/{path}", timeout=REQUEST_TIMEOUT, **kwargs)
-            if not self._is_transient(method, response.status_code) or attempt == MAX_ATTEMPTS - 1:
+            last_attempt = attempt == MAX_ATTEMPTS - 1
+            try:
+                response = self.session.request(method, f"{API_ROOT}/{path}", timeout=REQUEST_TIMEOUT, **kwargs)
+            except requests.RequestException as exc:
+                if method == "POST" or last_attempt:
+                    status_code = 504 if isinstance(exc, requests.Timeout) else 502
+                    raise BudgetApiError(status_code, f"Budget API request failed: {exc}") from exc
+                time.sleep(1)
+                continue
+            if not self._is_transient(method, response.status_code) or last_attempt:
                 break
             time.sleep(1)
         if response.status_code >= 400:

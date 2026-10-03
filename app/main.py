@@ -12,6 +12,7 @@ app = FastAPI(title="Spend Caps API", version="0.2.0")
 
 BillingAccountId = Annotated[str, Path(pattern=r"^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$")]
 BudgetId = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$")]
+UPSTREAM_STATUS_OVERRIDES = {401: 502, 500: 502}
 
 
 @lru_cache
@@ -29,7 +30,8 @@ def _spend_cap_error(_: Request, exc: SpendCapError):
 
 @app.exception_handler(BudgetApiError)
 def _budget_api_error(_: Request, exc: BudgetApiError):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+    status_code = UPSTREAM_STATUS_OVERRIDES.get(exc.status_code, exc.status_code)
+    return JSONResponse(status_code=status_code, content={"detail": exc.message})
 
 
 @app.get("/health")

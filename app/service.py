@@ -32,7 +32,7 @@ def _to_spend_cap(budget: dict) -> SpendCap:
     budget_filter = budget.get("budgetFilter", {})
     service_id = (budget_filter.get("services") or [""])[0].removeprefix("services/")
     specified = budget.get("amount", {}).get("specifiedAmount")
-    spend_cap = budget["spendCap"]
+    spend_cap = budget.get("spendCap", {})
     return SpendCap(
         id=budget_id,
         name=budget["name"],

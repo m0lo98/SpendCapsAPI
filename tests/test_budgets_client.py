@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import requests
 
 from app.budgets_client import API_ROOT, LIST_PASSES, MAX_ATTEMPTS, REQUEST_TIMEOUT, BudgetApiError, BudgetsClient
 
@@ -111,3 +112,36 @@ def test_error_message_is_extracted():
         BudgetsClient(session).get("billingAccounts/BA/budgets/1")
     assert exc.value.status_code == 400
     assert exc.value.message == "services filter must be set"
+
+
+class FailingSession(FakeSession):
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def test_network_error_is_retried(monkeypatch):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FailingSession([requests.ConnectionError("reset"), FakeResponse(200, {"name": "n"})])
+    assert BudgetsClient(session).get("billingAccounts/BA/budgets/1") == {"name": "n"}
+    assert len(session.calls) == 2
+
+
+def test_persistent_timeout_is_raised_as_gateway_timeout(monkeypatch):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FailingSession([requests.ReadTimeout("slow")] * MAX_ATTEMPTS)
+    with pytest.raises(BudgetApiError) as exc:
+        BudgetsClient(session).get("billingAccounts/BA/budgets/1")
+    assert exc.value.status_code == 504
+    assert len(session.calls) == MAX_ATTEMPTS
+
+
+def test_create_network_error_is_not_retried():
+    session = FailingSession([requests.ConnectionError("reset")])
+    with pytest.raises(BudgetApiError) as exc:
+        BudgetsClient(session).create("BA", {})
+    assert exc.value.status_code == 502
+    assert len(session.calls) == 1
