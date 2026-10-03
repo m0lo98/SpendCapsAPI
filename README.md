@@ -32,7 +32,7 @@ Fixed commitments (CUDs, Provisioned Throughput) keep billing while a cap is enf
 | `PATCH` | `/v1/billing-accounts/{ba}/spend-caps/{id}` | Change `amount` (not allowed by GCP while `ENFORCED`) |
 | `POST` | `/v1/billing-accounts/{ba}/spend-caps/{id}:lift` | Lift an enforced cap until the next month |
 | `DELETE` | `/v1/billing-accounts/{ba}/spend-caps/{id}` | Delete the cap |
-| `GET` | `/healthz` | Health check |
+| `GET` | `/health` | Health check |
 
 Interactive docs: `/docs`.
 
@@ -98,6 +98,14 @@ GOOGLE_CLOUD_QUOTA_PROJECT=<project-with-billingbudgets-api> .venv/bin/uvicorn a
 
 With user credentials the Budget API needs a quota project that has `billingbudgets.googleapis.com` enabled.
 On Cloud Run the service account's project is used.
+
+## Known Preview issues (observed 2026-10-03)
+
+- `ownershipScope: ALL_USERS` must be sent explicitly; omitting it returns a bare `INVALID_ARGUMENT`.
+- `PATCH` with `updateMask` returns `INVALID_ARGUMENT`; the API sends the full budget without a mask instead.
+- Reads are inconsistent: `get`/`patch` intermittently return 404 for existing budgets (retried up to 5 times),
+  and `list` can return an incomplete set, so the list endpoint and the duplicate check are best effort.
+- Error responses carry no field-level details.
 
 The official Python client (`google-cloud-billing-budgets` 1.22.0) does not expose `spendCap` yet,
 so `app/budgets_client.py` calls the REST API directly with `google-auth`.

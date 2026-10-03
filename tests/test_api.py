@@ -128,6 +128,15 @@ def test_validation(env):
     assert create(client, service="bigquery").status_code == 422
     assert create(client, amount=-1).status_code == 422
     assert create(client, currency_code="pln").status_code == 422
+    assert create(client, amount="1.999").status_code == 422
+    assert create(client, project_id="Acme prod").status_code == 422
+    assert client.get(f"{BASE}/bad.id").status_code == 422
+    assert client.patch(f"{BASE}/b1", json={"amount": "1.999"}).status_code == 422
+
+
+def test_health(env):
+    client, _ = env
+    assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_list_only_returns_spend_caps(env):
@@ -171,10 +180,14 @@ def test_update_amount_sends_full_budget(env):
     assert "etag" not in body
 
 
-def test_update_amount_keeps_lifted_state(env):
+def test_update_amount_keeps_lifted_state_while_reconciling(env):
     client, budgets = env
     created = create(client).json()
-    budgets.store[created["name"]]["spendCap"]["outputState"] = "AWAITING_NEXT_PERIOD"
+    budgets.store[created["name"]]["spendCap"] = {
+        "inputState": "AWAITING_NEXT_PERIOD",
+        "outputState": "CONFIGURED",
+        "reconciling": True,
+    }
     client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
     assert budgets.patches[-1][1]["spendCap"] == {"inputState": "AWAITING_NEXT_PERIOD"}
 

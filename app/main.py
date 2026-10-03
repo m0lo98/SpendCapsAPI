@@ -11,6 +11,7 @@ from app.service import SpendCapError, SpendCapService
 app = FastAPI(title="Spend Caps API", version="0.2.0")
 
 BillingAccountId = Annotated[str, Path(pattern=r"^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$")]
+BudgetId = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$")]
 
 
 @lru_cache
@@ -31,7 +32,7 @@ def _budget_api_error(_: Request, exc: BudgetApiError):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
-@app.get("/healthz")
+@app.get("/health")
 def healthz():
     return {"status": "ok"}
 
@@ -47,23 +48,23 @@ def list_spend_caps(billing_account_id: BillingAccountId, svc: Service) -> list[
 
 
 @app.get("/v1/billing-accounts/{billing_account_id}/spend-caps/{budget_id}")
-def get_spend_cap(billing_account_id: BillingAccountId, budget_id: str, svc: Service) -> SpendCap:
+def get_spend_cap(billing_account_id: BillingAccountId, budget_id: BudgetId, svc: Service) -> SpendCap:
     return svc.get(billing_account_id, budget_id)
 
 
 @app.patch("/v1/billing-accounts/{billing_account_id}/spend-caps/{budget_id}")
 def update_spend_cap(
-    billing_account_id: BillingAccountId, budget_id: str, body: SpendCapUpdate, svc: Service
+    billing_account_id: BillingAccountId, budget_id: BudgetId, body: SpendCapUpdate, svc: Service
 ) -> SpendCap:
     return svc.update_amount(billing_account_id, budget_id, body)
 
 
 @app.post("/v1/billing-accounts/{billing_account_id}/spend-caps/{budget_id}:lift")
-def lift_spend_cap(billing_account_id: BillingAccountId, budget_id: str, svc: Service) -> SpendCap:
+def lift_spend_cap(billing_account_id: BillingAccountId, budget_id: BudgetId, svc: Service) -> SpendCap:
     return svc.lift(billing_account_id, budget_id)
 
 
 @app.delete("/v1/billing-accounts/{billing_account_id}/spend-caps/{budget_id}", status_code=204)
-def delete_spend_cap(billing_account_id: BillingAccountId, budget_id: str, svc: Service) -> Response:
+def delete_spend_cap(billing_account_id: BillingAccountId, budget_id: BudgetId, svc: Service) -> Response:
     svc.delete(billing_account_id, budget_id)
     return Response(status_code=204)

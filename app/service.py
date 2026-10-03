@@ -102,10 +102,10 @@ class SpendCapService:
 
     def update_amount(self, billing_account_id: str, budget_id: str, req: SpendCapUpdate) -> SpendCap:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
-        state = budget["spendCap"].get("outputState", "CONFIGURED")
-        if state == "ENFORCED":
+        spend_cap = budget["spendCap"]
+        if spend_cap.get("outputState") == "ENFORCED":
             raise SpendCapError(409, f"Spend cap {budget_id} is enforced; lift it before changing the amount")
-        body = self._full_budget(budget, input_state=state)
+        body = self._full_budget(budget, input_state=spend_cap.get("inputState", "CONFIGURED"))
         currency = budget.get("amount", {}).get("specifiedAmount", {}).get("currencyCode")
         body["amount"] = {"specifiedAmount": _to_money(req.amount, currency)}
         return _to_spend_cap(self.budgets.patch(budget["name"], body))
