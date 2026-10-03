@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.budgets_client import BudgetApiError
 from app.main import app, get_service
 from app.service import SpendCapService
+from tests.test_audit import id_token
 
 BA = "012345-6789AB-CDEF01"
 BASE = f"/v1/billing-accounts/{BA}/spend-caps"
@@ -243,3 +245,45 @@ def test_google_api_error_is_passed_through(env):
     r = create(client)
     assert r.status_code == 403
     assert "configureSpendCap" in r.json()["detail"]
+
+
+def audit_entries(capsys) -> list[dict]:
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
+
+
+def test_mutations_are_audited_with_caller(env, capsys):
+    client, budgets = env
+    client.headers["Authorization"] = f"Bearer {id_token({'email': 'ops@fotc.com'})}"
+    created = create(client).json()
+    client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
+    budgets.store[created["name"]]["spendCap"]["outputState"] = "ENFORCED"
+    client.post(f"{BASE}/{created['id']}:lift")
+    client.delete(f"{BASE}/{created['id']}")
+
+    entries = audit_entries(capsys)
+    assert [e["audit"]["action"] for e in entries] == ["create", "update_amount", "lift", "delete"]
+    assert {e["audit"]["caller"] for e in entries} == {"ops@fotc.com"}
+    assert {e["audit"]["spend_cap_id"] for e in entries} == {created["id"]}
+    assert {e["severity"] for e in entries} == {"NOTICE"}
+    assert entries[0]["audit"] | {"caller": None} == {
+        "caller": None,
+        "action": "create",
+        "billing_account_id": created["billing_account_id"],
+        "spend_cap_id": created["id"],
+        "project": "projects/acme-prod",
+        "service": "cloud-run",
+        "amount": "1500.50",
+        "currency_code": "PLN",
+    }
+    assert entries[1]["audit"]["amount"] == "250"
+
+
+def test_reads_and_failed_mutations_are_not_audited(env, capsys):
+    client, _ = env
+    created = create(client).json()
+    capsys.readouterr()
+    client.get(BASE)
+    client.get(f"{BASE}/{created['id']}")
+    client.post(f"{BASE}/{created['id']}:lift")
+    client.delete(f"{BASE}/missing")
+    assert audit_entries(capsys) == []

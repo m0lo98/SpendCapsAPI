@@ -63,6 +63,20 @@ The caller identity (the Cloud Run service account) needs:
 Predefined roles that grant this: Billing Account Administrator, or Billing Account Costs Manager
 together with Project Editor/Owner on the customer projects (grant on the customers' folder).
 
+## Audit log
+
+Cloud Audit Logs of the Budget API show only the service account, so every successful create, amount update,
+lift and delete is logged by the API itself as a `NOTICE` entry with `jsonPayload.audit`: the caller's email
+(read from the ID token that Cloud Run IAM has already verified), the action, billing account, spend cap id and,
+where relevant, project, service and amount. Reads and failed requests are not audited.
+
+```bash
+gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="spend-caps"
+  AND jsonPayload.audit.action:*' --project $PROJECT --format json
+```
+
+The caller is only trustworthy while the service is deployed with `--no-allow-unauthenticated`.
+
 ## Deployment (Cloud Run)
 
 ```bash
