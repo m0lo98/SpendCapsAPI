@@ -112,6 +112,38 @@ def test_create_passes_currency(env):
     assert budgets.store[r.json()["name"]]["amount"]["specifiedAmount"]["currencyCode"] == "EUR"
 
 
+def test_create_uses_display_name_format():
+    budgets = FakeBudgets()
+    app.dependency_overrides[get_service] = lambda: SpendCapService(
+        budgets, "[SpendCaps] [{service_name}] {project_id}"
+    )
+    try:
+        r = create(TestClient(app))
+    finally:
+        app.dependency_overrides.clear()
+    assert r.json()["display_name"] == "[SpendCaps] [Cloud Run] acme-prod"
+
+
+def test_create_truncates_formatted_display_name():
+    budgets = FakeBudgets()
+    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets, "{project_id} " * 7)
+    try:
+        r = create(TestClient(app))
+    finally:
+        app.dependency_overrides.clear()
+    assert r.json()["display_name"] == ("acme-prod " * 7)[:60]
+
+
+def test_create_explicit_display_name_overrides_format():
+    budgets = FakeBudgets()
+    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets, "[SpendCaps] {project_id}")
+    try:
+        r = create(TestClient(app), display_name="ACME cap")
+    finally:
+        app.dependency_overrides.clear()
+    assert r.json()["display_name"] == "ACME cap"
+
+
 def test_create_duplicate_for_same_service_conflicts(env):
     client, _ = env
     assert create(client).status_code == 201

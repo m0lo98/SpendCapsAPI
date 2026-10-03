@@ -48,7 +48,8 @@ POST /v1/billing-accounts/012345-6789AB-CDEF01/spend-caps
 ```
 
 `currency_code` and `display_name` are optional. The currency defaults to the billing account's and
-must match it when given.
+must match it when given. Without `display_name` the name is built from `DISPLAY_NAME_FORMAT` (see
+[Configuration](#configuration)).
 
 `state` in responses: `CONFIGURED` (active), `ENFORCED` (usage blocked), `AWAITING_NEXT_PERIOD`
 (lifted, re-arms next month). `reconciling: true` means GCP is still applying a state change.
@@ -104,13 +105,30 @@ curl -X POST "$URL/v1/billing-accounts/$BA/spend-caps" \
   -d '{"project_id": "acme-prod", "service": "cloud-run", "amount": 1500}'
 ```
 
+## Configuration
+
+Settings are read from environment variables. A `.env` file in the working directory is loaded at startup
+(see `.env.example`); variables already set in the environment take precedence.
+
+| Variable | Default | Description |
+|---|---|---|
+| `GOOGLE_CLOUD_QUOTA_PROJECT` | | Quota project for user credentials (local development) |
+| `DISPLAY_NAME_FORMAT` | `spend-cap-{project_id}-{service}` | Display name of a created cap when the request has none, cut to 60 characters |
+
+`DISPLAY_NAME_FORMAT` placeholders: `{project_id}` (`acme-prod`), `{service}` (`cloud-run`) and `{service_name}`
+(`Cloud Run`, `Cloud Run functions`, `Gemini API`, `Vertex AI`). For example
+`[SpendCaps] [{service_name}] {project_id}` gives `[SpendCaps] [Cloud Run] acme-prod`.
+
+On Cloud Run set them with `--set-env-vars` (`.env` is not part of the image).
+
 ## Local development
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 gcloud auth application-default login
-GOOGLE_CLOUD_QUOTA_PROJECT=<project-with-billingbudgets-api> .venv/bin/uvicorn app.main:app --reload
+cp .env.example .env  # set GOOGLE_CLOUD_QUOTA_PROJECT
+.venv/bin/uvicorn app.main:app --reload
 ```
 
 With user credentials the Budget API needs a quota project that has `billingbudgets.googleapis.com` enabled.
