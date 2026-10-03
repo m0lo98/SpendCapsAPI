@@ -127,6 +127,9 @@ On Cloud Run the service account's project is used.
 - A second cap for the same project and service is rejected by GCP with a bare `400 INVALID_ARGUMENT`. When the
   pre-create check misses the existing cap, the API looks it up again with 8 list passes and returns `409` with
   its name; if it is still not found, the original `400` is returned.
+- `DELETE` can return success while the cap stays in place. The API re-reads the cap after each delete and
+  repeats it up to 3 times; if the cap is still there it returns `502` instead of `204`. Right after a delete,
+  creating a cap for the same project and service may briefly fail with `400 INVALID_ARGUMENT`.
 - Error responses carry no field-level details.
 
 The official Python client (`google-cloud-billing-budgets` 1.22.0) does not expose `spendCap` yet,

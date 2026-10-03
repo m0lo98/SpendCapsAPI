@@ -6,6 +6,7 @@ from app.models import SERVICE_IDS, SpendCap, SpendCapCreate, SpendCapUpdate
 SERVICES_BY_ID = {service_id: service for service, service_id in SERVICE_IDS.items()}
 SPEND_CAP_THRESHOLDS = [0.5, 0.8, 1.0]
 DUPLICATE_LOOKUP_PASSES = 8
+DELETE_ATTEMPTS = 3
 
 
 class SpendCapError(Exception):
@@ -145,6 +146,24 @@ class SpendCapService:
         body = self._full_budget(budget, input_state="AWAITING_NEXT_PERIOD")
         return self._patch(budget_id, body)
 
+    def _exists(self, name: str) -> bool:
+        try:
+            self.budgets.get(name)
+        except BudgetApiError as exc:
+            if exc.status_code == 404:
+                return False
+            raise
+        return True
+
     def delete(self, billing_account_id: str, budget_id: str) -> None:
-        budget = self._get_spend_cap_budget(billing_account_id, budget_id)
-        self.budgets.delete(budget["name"])
+        name = self._get_spend_cap_budget(billing_account_id, budget_id)["name"]
+        # Spend cap budgets (Preview) can survive a DELETE that returned success.
+        for _ in range(DELETE_ATTEMPTS):
+            try:
+                self.budgets.delete(name)
+            except BudgetApiError as exc:
+                if exc.status_code != 404:
+                    raise
+            if not self._exists(name):
+                return
+        raise SpendCapError(502, f"Spend cap {budget_id} still exists after {DELETE_ATTEMPTS} delete attempts")
