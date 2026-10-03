@@ -20,15 +20,15 @@ SERVICE_IDS = {
 
 
 class SpendCapCreate(BaseModel):
-    project_id: str = Field(min_length=1)
+    project_id: str = Field(pattern=r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
     service: Service
-    amount: Decimal = Field(ge=0)
+    amount: Decimal = Field(ge=0, decimal_places=2)
     currency_code: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     display_name: str | None = Field(default=None, max_length=60)
 
 
 class SpendCapUpdate(BaseModel):
-    amount: Decimal = Field(ge=0)
+    amount: Decimal = Field(ge=0, decimal_places=2)
 
 
 class SpendCap(BaseModel):
