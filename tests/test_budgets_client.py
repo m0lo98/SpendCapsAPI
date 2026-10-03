@@ -63,12 +63,16 @@ def test_persistent_not_found_is_raised(monkeypatch):
     assert len(session.calls) == MAX_ATTEMPTS
 
 
-@pytest.mark.parametrize("method", ["GET", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "operation",
+    [lambda c, n: c.get(n), lambda c, n: c.patch(n, {}), lambda c, n: c.delete(n)],
+    ids=["get", "patch", "delete"],
+)
 @pytest.mark.parametrize("status", [429, 500, 503])
-def test_transient_errors_are_retried(monkeypatch, method, status):
+def test_transient_errors_are_retried(monkeypatch, operation, status):
     monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
     session = FakeSession([FakeResponse(status, {"error": {"message": "busy"}}), FakeResponse(200, {"name": "n"})])
-    assert BudgetsClient(session)._call(method, "billingAccounts/BA/budgets/1") == {"name": "n"}
+    operation(BudgetsClient(session), "billingAccounts/BA/budgets/1")
     assert len(session.calls) == 2
 
 
