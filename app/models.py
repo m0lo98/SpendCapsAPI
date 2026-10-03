@@ -2,7 +2,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Service(StrEnum):
@@ -24,6 +24,8 @@ Amount = Annotated[Decimal, Field(ge=0, le=MAX_MONEY_UNITS, decimal_places=2)]
 
 
 class SpendCapCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     project_id: str = Field(pattern=r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
     service: Service
     amount: Amount
@@ -32,6 +34,8 @@ class SpendCapCreate(BaseModel):
 
 
 class SpendCapUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     amount: Amount
 
 

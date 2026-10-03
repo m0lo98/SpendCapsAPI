@@ -247,6 +247,38 @@ def test_google_api_error_is_passed_through(env):
     assert "configureSpendCap" in r.json()["detail"]
 
 
+def test_unknown_fields_are_rejected(env):
+    client, _ = env
+    assert create(client, currency="EUR").status_code == 422
+    created = create(client).json()
+    assert client.patch(f"{BASE}/{created['id']}", json={"amount": 250, "currency": "EUR"}).status_code == 422
+
+
+def test_create_tolerates_response_without_spend_cap(env):
+    client, budgets = env
+    original_create = budgets.create
+
+    def create_without_spend_cap(billing_account_id, budget):
+        created = original_create(billing_account_id, budget)
+        return {k: v for k, v in created.items() if k != "spendCap"}
+
+    budgets.create = create_without_spend_cap
+    r = create(client)
+    assert r.status_code == 201, r.text
+    assert r.json()["state"] == "STATE_UNSPECIFIED"
+
+
+@pytest.mark.parametrize(("upstream", "expected"), [(401, 502), (500, 502), (403, 403), (503, 503)])
+def test_upstream_status_mapping(env, upstream, expected):
+    client, budgets = env
+
+    def fail(*_args, **_kwargs):
+        raise BudgetApiError(upstream, "upstream failure")
+
+    budgets.get = fail
+    assert client.get(f"{BASE}/b1").status_code == expected
+
+
 def audit_entries(capsys) -> list[dict]:
     return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")]
 
