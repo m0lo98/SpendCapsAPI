@@ -1,9 +1,11 @@
+import time
 from collections.abc import Iterator
 
 import google.auth
 from google.auth.transport.requests import AuthorizedSession
 
 API_ROOT = "https://billingbudgets.googleapis.com/v1"
+NOT_FOUND_RETRIES = 5
 
 
 class BudgetApiError(Exception):
@@ -21,7 +23,12 @@ class BudgetsClient:
         self.session = session
 
     def _call(self, method: str, path: str, **kwargs) -> dict:
-        response = self.session.request(method, f"{API_ROOT}/{path}", **kwargs)
+        for attempt in range(NOT_FOUND_RETRIES):
+            response = self.session.request(method, f"{API_ROOT}/{path}", **kwargs)
+            # Spend cap budgets (Preview) intermittently return 404 for existing budgets.
+            if response.status_code != 404 or method == "POST" or attempt == NOT_FOUND_RETRIES - 1:
+                break
+            time.sleep(1)
         if response.status_code >= 400:
             try:
                 message = response.json()["error"]["message"]
@@ -47,8 +54,8 @@ class BudgetsClient:
     def get(self, name: str) -> dict:
         return self._call("GET", name)
 
-    def patch(self, name: str, budget: dict, update_mask: str) -> dict:
-        return self._call("PATCH", name, json=budget, params={"updateMask": update_mask})
+    def patch(self, name: str, budget: dict) -> dict:
+        return self._call("PATCH", name, json=budget)
 
     def delete(self, name: str) -> None:
         self._call("DELETE", name)

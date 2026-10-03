@@ -93,8 +93,19 @@ curl -X POST "$URL/v1/billing-accounts/$BA/spend-caps" \
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 gcloud auth application-default login
-.venv/bin/uvicorn app.main:app --reload
+GOOGLE_CLOUD_QUOTA_PROJECT=<project-with-billingbudgets-api> .venv/bin/uvicorn app.main:app --reload
 ```
+
+With user credentials the Budget API needs a quota project that has `billingbudgets.googleapis.com` enabled.
+On Cloud Run the service account's project is used.
+
+## Known Preview issues (observed 2026-10-03)
+
+- `ownershipScope: ALL_USERS` must be sent explicitly; omitting it returns a bare `INVALID_ARGUMENT`.
+- `PATCH` with `updateMask` returns `INVALID_ARGUMENT`; the API sends the full budget without a mask instead.
+- Reads are inconsistent: `get`/`patch` intermittently return 404 for existing budgets (retried up to 5 times),
+  and `list` can return an incomplete set, so the list endpoint and the duplicate check are best effort.
+- Error responses carry no field-level details.
 
 The official Python client (`google-cloud-billing-budgets` 1.22.0) does not expose `spendCap` yet,
 so `app/budgets_client.py` calls the REST API directly with `google-auth`.

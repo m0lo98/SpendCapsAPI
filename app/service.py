@@ -83,6 +83,7 @@ class SpendCapService:
             "thresholdRules": [{"thresholdPercent": t, "spendBasis": "CURRENT_SPEND"} for t in SPEND_CAP_THRESHOLDS],
             "notificationsRule": {"enableProjectLevelRecipients": True},
             "spendCap": {"inputState": "CONFIGURED"},
+            "ownershipScope": "ALL_USERS",
         }
         return _to_spend_cap(self.budgets.create(billing_account_id, budget))
 
@@ -92,17 +93,29 @@ class SpendCapService:
     def get(self, billing_account_id: str, budget_id: str) -> SpendCap:
         return _to_spend_cap(self._get_spend_cap_budget(billing_account_id, budget_id))
 
+    @staticmethod
+    def _full_budget(budget: dict, input_state: str) -> dict:
+        body = {k: v for k, v in budget.items() if k != "etag"}
+        body["ownershipScope"] = "ALL_USERS"
+        body["spendCap"] = {"inputState": input_state}
+        return body
+
     def update_amount(self, billing_account_id: str, budget_id: str, req: SpendCapUpdate) -> SpendCap:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
-        patch = {"amount": {"specifiedAmount": _to_money(req.amount)}, "etag": budget.get("etag")}
-        return _to_spend_cap(self.budgets.patch(budget["name"], patch, update_mask="amount"))
+        state = budget["spendCap"].get("outputState", "CONFIGURED")
+        if state == "ENFORCED":
+            raise SpendCapError(409, f"Spend cap {budget_id} is enforced; lift it before changing the amount")
+        body = self._full_budget(budget, input_state=state)
+        currency = budget.get("amount", {}).get("specifiedAmount", {}).get("currencyCode")
+        body["amount"] = {"specifiedAmount": _to_money(req.amount, currency)}
+        return _to_spend_cap(self.budgets.patch(budget["name"], body))
 
     def lift(self, billing_account_id: str, budget_id: str) -> SpendCap:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
         if budget["spendCap"].get("outputState") != "ENFORCED":
             raise SpendCapError(409, f"Spend cap {budget_id} is not enforced")
-        patch = {"spendCap": {"inputState": "AWAITING_NEXT_PERIOD"}, "etag": budget.get("etag")}
-        return _to_spend_cap(self.budgets.patch(budget["name"], patch, update_mask="spendCap.inputState"))
+        body = self._full_budget(budget, input_state="AWAITING_NEXT_PERIOD")
+        return _to_spend_cap(self.budgets.patch(budget["name"], body))
 
     def delete(self, billing_account_id: str, budget_id: str) -> None:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
