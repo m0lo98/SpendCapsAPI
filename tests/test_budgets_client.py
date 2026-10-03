@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.budgets_client import API_ROOT, BudgetApiError, BudgetsClient
+from app.budgets_client import API_ROOT, NOT_FOUND_RETRIES, BudgetApiError, BudgetsClient
 
 
 class FakeResponse:
@@ -39,12 +39,28 @@ def test_list_follows_pagination_and_scope():
     assert session.calls[1][2]["params"]["pageToken"] == "t1"
 
 
-def test_patch_sends_update_mask():
+def test_patch_sends_body_without_update_mask():
     session = FakeSession([FakeResponse(200, {"name": "n"})])
-    BudgetsClient(session).patch("billingAccounts/BA/budgets/1", {"x": 1}, update_mask="amount")
+    BudgetsClient(session).patch("billingAccounts/BA/budgets/1", {"x": 1})
     method, url, kwargs = session.calls[0]
     assert (method, url) == ("PATCH", f"{API_ROOT}/billingAccounts/BA/budgets/1")
-    assert kwargs == {"json": {"x": 1}, "params": {"updateMask": "amount"}}
+    assert kwargs == {"json": {"x": 1}}
+
+
+def test_intermittent_not_found_is_retried(monkeypatch):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FakeSession([FakeResponse(404, {"error": {"message": "nf"}}), FakeResponse(200, {"name": "n"})])
+    assert BudgetsClient(session).get("billingAccounts/BA/budgets/1") == {"name": "n"}
+    assert len(session.calls) == 2
+
+
+def test_persistent_not_found_is_raised(monkeypatch):
+    monkeypatch.setattr("app.budgets_client.time.sleep", lambda _: None)
+    session = FakeSession([FakeResponse(404, {"error": {"message": "nf"}})] * NOT_FOUND_RETRIES)
+    with pytest.raises(BudgetApiError) as exc:
+        BudgetsClient(session).get("billingAccounts/BA/budgets/1")
+    assert exc.value.status_code == 404
+    assert len(session.calls) == NOT_FOUND_RETRIES
 
 
 def test_delete_with_empty_body():

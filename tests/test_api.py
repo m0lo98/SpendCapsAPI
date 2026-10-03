@@ -15,7 +15,7 @@ CLOUD_RUN = "services/152E-C115-5142"
 class FakeBudgets:
     def __init__(self):
         self.store: dict[str, dict] = {}
-        self.patches: list[tuple[str, dict, str]] = []
+        self.patches: list[tuple[str, dict]] = []
         self.seq = 0
 
     def create(self, billing_account_id, budget):
@@ -43,16 +43,12 @@ class FakeBudgets:
             raise BudgetApiError(404, "Budget not found")
         return self.store[name]
 
-    def patch(self, name, budget, update_mask):
-        self.patches.append((name, budget, update_mask))
+    def patch(self, name, budget):
+        self.patches.append((name, budget))
         current = self.store[name]
-        if update_mask == "amount":
-            current["amount"]["specifiedAmount"].update(budget["amount"]["specifiedAmount"])
-        elif update_mask == "spendCap.inputState":
-            current["spendCap"] = {
-                "inputState": budget["spendCap"]["inputState"],
-                "outputState": "AWAITING_NEXT_PERIOD",
-            }
+        current["amount"] = budget["amount"]
+        state = budget["spendCap"]["inputState"]
+        current["spendCap"] = {"inputState": state, "outputState": state}
         return current
 
     def delete(self, name):
@@ -96,6 +92,7 @@ def test_create_builds_spend_cap_budget(env):
     assert [r["thresholdPercent"] for r in sent["thresholdRules"]] == [0.5, 0.8, 1.0]
     assert {r["spendBasis"] for r in sent["thresholdRules"]} == {"CURRENT_SPEND"}
     assert sent["notificationsRule"] == {"enableProjectLevelRecipients": True}
+    assert sent["ownershipScope"] == "ALL_USERS"
 
 
 def test_create_passes_currency(env):
@@ -159,16 +156,35 @@ def test_regular_budget_is_not_exposed(env):
     assert f"billingAccounts/{BA}/budgets/plain" in budgets.store
 
 
-def test_update_amount(env):
+def test_update_amount_sends_full_budget(env):
     client, budgets = env
     created = create(client).json()
     r = client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
     assert r.status_code == 200, r.text
     assert r.json()["amount"] == "250"
-    name, patch, mask = budgets.patches[-1]
-    assert mask == "amount"
-    assert patch["etag"] == "e1"
-    assert "currencyCode" not in patch["amount"]["specifiedAmount"]
+    assert r.json()["state"] == "CONFIGURED"
+    _, body = budgets.patches[-1]
+    assert body["amount"]["specifiedAmount"] == {"units": "250", "nanos": 0, "currencyCode": "PLN"}
+    assert body["ownershipScope"] == "ALL_USERS"
+    assert body["spendCap"] == {"inputState": "CONFIGURED"}
+    assert body["budgetFilter"]["services"] == [CLOUD_RUN]
+    assert "etag" not in body
+
+
+def test_update_amount_keeps_lifted_state(env):
+    client, budgets = env
+    created = create(client).json()
+    budgets.store[created["name"]]["spendCap"]["outputState"] = "AWAITING_NEXT_PERIOD"
+    client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
+    assert budgets.patches[-1][1]["spendCap"] == {"inputState": "AWAITING_NEXT_PERIOD"}
+
+
+def test_update_amount_rejected_while_enforced(env):
+    client, budgets = env
+    created = create(client).json()
+    budgets.store[created["name"]]["spendCap"]["outputState"] = "ENFORCED"
+    assert client.patch(f"{BASE}/{created['id']}", json={"amount": 250}).status_code == 409
+    assert budgets.patches == []
 
 
 def test_lift_requires_enforced_state(env):
@@ -184,9 +200,9 @@ def test_lift_enforced_cap(env):
     r = client.post(f"{BASE}/{created['id']}:lift")
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "AWAITING_NEXT_PERIOD"
-    _, patch, mask = budgets.patches[-1]
-    assert mask == "spendCap.inputState"
-    assert patch["spendCap"] == {"inputState": "AWAITING_NEXT_PERIOD"}
+    _, body = budgets.patches[-1]
+    assert body["spendCap"] == {"inputState": "AWAITING_NEXT_PERIOD"}
+    assert body["ownershipScope"] == "ALL_USERS"
 
 
 def test_google_api_error_is_passed_through(env):
