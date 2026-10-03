@@ -6,6 +6,7 @@ from google.auth.transport.requests import AuthorizedSession
 
 API_ROOT = "https://billingbudgets.googleapis.com/v1"
 NOT_FOUND_RETRIES = 5
+LIST_PASSES = 3
 
 
 class BudgetApiError(Exception):
@@ -41,6 +42,15 @@ class BudgetsClient:
         return self._call("POST", f"billingAccounts/{billing_account_id}/budgets", json=budget)
 
     def list(self, billing_account_id: str, project: str | None = None) -> Iterator[dict]:
+        # Spend cap budgets (Preview) are intermittently missing from list results, so merge several passes.
+        seen = set()
+        for _ in range(LIST_PASSES):
+            for budget in self._list_once(billing_account_id, project):
+                if budget["name"] not in seen:
+                    seen.add(budget["name"])
+                    yield budget
+
+    def _list_once(self, billing_account_id: str, project: str | None) -> Iterator[dict]:
         params = {"pageSize": 100}
         if project:
             params["scope"] = project

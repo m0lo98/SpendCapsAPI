@@ -149,6 +149,19 @@ def test_list_only_returns_spend_caps(env):
     assert [c["id"] for c in client.get(BASE).json()] == [created["id"]]
 
 
+def test_list_tolerates_cap_without_filter_entries(env):
+    client, budgets = env
+    budgets.store[f"billingAccounts/{BA}/budgets/odd"] = {
+        "name": f"billingAccounts/{BA}/budgets/odd",
+        "budgetFilter": {"projects": [], "services": []},
+        "spendCap": {"outputState": "CONFIGURED"},
+    }
+    r = client.get(BASE)
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["project"] == ""
+    assert r.json()[0]["service"] is None
+
+
 def test_get_and_delete(env):
     client, _ = env
     created = create(client).json()
