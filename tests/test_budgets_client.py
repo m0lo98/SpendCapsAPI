@@ -107,11 +107,13 @@ def test_delete_with_empty_body():
 
 
 def test_error_message_is_extracted():
-    session = FakeSession([FakeResponse(400, {"error": {"code": 400, "message": "services filter must be set"}})])
+    error = {"code": 400, "message": "Precondition check failed.", "status": "FAILED_PRECONDITION"}
+    session = FakeSession([FakeResponse(400, {"error": error})])
     with pytest.raises(BudgetApiError) as exc:
         BudgetsClient(session).get("billingAccounts/BA/budgets/1")
     assert exc.value.status_code == 400
-    assert exc.value.message == "services filter must be set"
+    assert exc.value.message == "Precondition check failed."
+    assert exc.value.status == "FAILED_PRECONDITION"
 
 
 class FailingSession(FakeSession):

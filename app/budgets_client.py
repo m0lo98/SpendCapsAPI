@@ -13,10 +13,11 @@ LIST_PASSES = 3
 
 
 class BudgetApiError(Exception):
-    def __init__(self, status_code: int, message: str):
+    def __init__(self, status_code: int, message: str, status: str = ""):
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.status = status
 
 
 class BudgetsClient:
@@ -50,10 +51,11 @@ class BudgetsClient:
             time.sleep(1)
         if response.status_code >= 400:
             try:
-                message = response.json()["error"]["message"]
+                error = response.json()["error"]
+                message, status = error["message"], error.get("status", "")
             except (ValueError, KeyError, TypeError):
-                message = response.text
-            raise BudgetApiError(response.status_code, message)
+                message, status = response.text, ""
+            raise BudgetApiError(response.status_code, message, status)
         return response.json() if response.content else {}
 
     def create(self, billing_account_id: str, budget: dict) -> dict:

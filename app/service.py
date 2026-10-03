@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.budgets_client import BudgetsClient
+from app.budgets_client import BudgetApiError, BudgetsClient
 from app.models import SERVICE_IDS, SpendCap, SpendCapCreate, SpendCapUpdate
 
 SERVICES_BY_ID = {service_id: service for service, service_id in SERVICE_IDS.items()}
@@ -95,10 +95,18 @@ class SpendCapService:
 
     @staticmethod
     def _full_budget(budget: dict, input_state: str) -> dict:
-        body = {k: v for k, v in budget.items() if k != "etag"}
+        body = dict(budget)
         body["ownershipScope"] = "ALL_USERS"
         body["spendCap"] = {"inputState": input_state}
         return body
+
+    def _patch(self, budget_id: str, body: dict) -> SpendCap:
+        try:
+            return _to_spend_cap(self.budgets.patch(body["name"], body))
+        except BudgetApiError as exc:
+            if exc.status == "FAILED_PRECONDITION":
+                raise SpendCapError(409, f"Spend cap {budget_id} changed since it was read; retry the request") from exc
+            raise
 
     def update_amount(self, billing_account_id: str, budget_id: str, req: SpendCapUpdate) -> SpendCap:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
@@ -108,14 +116,14 @@ class SpendCapService:
         body = self._full_budget(budget, input_state=spend_cap.get("inputState", "CONFIGURED"))
         currency = budget.get("amount", {}).get("specifiedAmount", {}).get("currencyCode")
         body["amount"] = {"specifiedAmount": _to_money(req.amount, currency)}
-        return _to_spend_cap(self.budgets.patch(budget["name"], body))
+        return self._patch(budget_id, body)
 
     def lift(self, billing_account_id: str, budget_id: str) -> SpendCap:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)
         if budget["spendCap"].get("outputState") != "ENFORCED":
             raise SpendCapError(409, f"Spend cap {budget_id} is not enforced")
         body = self._full_budget(budget, input_state="AWAITING_NEXT_PERIOD")
-        return _to_spend_cap(self.budgets.patch(budget["name"], body))
+        return self._patch(budget_id, body)
 
     def delete(self, billing_account_id: str, budget_id: str) -> None:
         budget = self._get_spend_cap_budget(billing_account_id, budget_id)

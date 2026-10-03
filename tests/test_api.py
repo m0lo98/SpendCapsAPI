@@ -48,6 +48,9 @@ class FakeBudgets:
     def patch(self, name, budget):
         self.patches.append((name, budget))
         current = self.store[name]
+        if budget.get("etag") != current.get("etag"):
+            raise BudgetApiError(400, "Precondition check failed.", "FAILED_PRECONDITION")
+        current["etag"] = f"e{len(self.patches) + 1}"
         current["amount"] = budget["amount"]
         state = budget["spendCap"]["inputState"]
         current["spendCap"] = {"inputState": state, "outputState": state}
@@ -194,7 +197,18 @@ def test_update_amount_sends_full_budget(env):
     assert body["ownershipScope"] == "ALL_USERS"
     assert body["spendCap"] == {"inputState": "CONFIGURED"}
     assert body["budgetFilter"]["services"] == [CLOUD_RUN]
-    assert "etag" not in body
+    assert body["etag"] == "e1"
+
+
+def test_update_amount_rejects_concurrent_change(env):
+    client, budgets = env
+    created = create(client).json()
+    stale = copy.deepcopy(budgets.store[created["name"]]) | {"etag": "e0"}
+    budgets.get = lambda _name: stale
+    r = client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
+    assert r.status_code == 409
+    assert "changed since it was read" in r.json()["detail"]
+    assert budgets.store[created["name"]]["amount"]["specifiedAmount"]["units"] == "1500"
 
 
 def test_update_amount_keeps_lifted_state_while_reconciling(env):
