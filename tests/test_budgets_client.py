@@ -26,10 +26,12 @@ class FakeSession:
 
 
 def test_list_follows_pagination_and_scope():
-    session = FakeSession([
-        FakeResponse(200, {"budgets": [{"name": "a"}], "nextPageToken": "t1"}),
-        FakeResponse(200, {"budgets": [{"name": "b"}]}),
-    ])
+    session = FakeSession(
+        [
+            FakeResponse(200, {"budgets": [{"name": "a"}], "nextPageToken": "t1"}),
+            FakeResponse(200, {"budgets": [{"name": "b"}]}),
+        ]
+    )
     names = [b["name"] for b in BudgetsClient(session).list("BA", project="projects/p")]
     assert names == ["a", "b"]
     assert session.calls[0][1] == f"{API_ROOT}/billingAccounts/BA/budgets"

@@ -33,7 +33,8 @@ class FakeBudgets:
     def list(self, billing_account_id, project=None):
         prefix = f"billingAccounts/{billing_account_id}/"
         return [
-            b for n, b in self.store.items()
+            b
+            for n, b in self.store.items()
             if n.startswith(prefix) and (project is None or project in b["budgetFilter"].get("projects", []))
         ]
 
@@ -48,7 +49,10 @@ class FakeBudgets:
         if update_mask == "amount":
             current["amount"]["specifiedAmount"].update(budget["amount"]["specifiedAmount"])
         elif update_mask == "spendCap.inputState":
-            current["spendCap"] = {"inputState": budget["spendCap"]["inputState"], "outputState": "AWAITING_NEXT_PERIOD"}
+            current["spendCap"] = {
+                "inputState": budget["spendCap"]["inputState"],
+                "outputState": "AWAITING_NEXT_PERIOD",
+            }
         return current
 
     def delete(self, name):
@@ -118,7 +122,12 @@ def test_create_ignores_regular_budget_on_same_project(env):
 
 def test_validation(env):
     client, _ = env
-    assert client.post("/v1/billing-accounts/bad/spend-caps", json={"project_id": "p", "service": "cloud-run", "amount": 1}).status_code == 422
+    assert (
+        client.post(
+            "/v1/billing-accounts/bad/spend-caps", json={"project_id": "p", "service": "cloud-run", "amount": 1}
+        ).status_code
+        == 422
+    )
     assert create(client, service="bigquery").status_code == 422
     assert create(client, amount=-1).status_code == 422
     assert create(client, currency_code="pln").status_code == 422
@@ -128,7 +137,8 @@ def test_list_only_returns_spend_caps(env):
     client, budgets = env
     created = create(client).json()
     budgets.store[f"billingAccounts/{BA}/budgets/plain"] = {
-        "name": f"billingAccounts/{BA}/budgets/plain", "budgetFilter": {}
+        "name": f"billingAccounts/{BA}/budgets/plain",
+        "budgetFilter": {},
     }
     assert [c["id"] for c in client.get(BASE).json()] == [created["id"]]
 
