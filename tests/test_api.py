@@ -1,209 +1,191 @@
-import base64
-import json
+import copy
 
 import pytest
 from fastapi.testclient import TestClient
-from google.api_core import exceptions as gexc
-from google.cloud import billing_v1
-from google.cloud.billing import budgets_v1
 
-from app.config import Settings
+from app.budgets_client import BudgetApiError
 from app.main import app, get_service
 from app.service import SpendCapService
 
 BA = "012345-6789AB-CDEF01"
-TOPIC = "projects/ops/topics/spend-caps"
+BASE = f"/v1/billing-accounts/{BA}/spend-caps"
+CLOUD_RUN = "services/152E-C115-5142"
 
 
 class FakeBudgets:
     def __init__(self):
-        self.store: dict[str, budgets_v1.Budget] = {}
+        self.store: dict[str, dict] = {}
+        self.patches: list[tuple[str, dict, str]] = []
         self.seq = 0
 
-    def create_budget(self, parent, budget):
+    def create(self, billing_account_id, budget):
         self.seq += 1
-        b = budgets_v1.Budget(budget)
-        b.name = f"{parent}/budgets/b{self.seq}"
-        b.etag = "e1"
-        self.store[b.name] = b
+        b = copy.deepcopy(budget)
+        b["name"] = f"billingAccounts/{billing_account_id}/budgets/b{self.seq}"
+        b["etag"] = "e1"
+        if "spendCap" in b:
+            b["spendCap"] = {"inputState": "CONFIGURED", "outputState": "CONFIGURED"}
+        if "currencyCode" not in b["amount"]["specifiedAmount"]:
+            b["amount"]["specifiedAmount"]["currencyCode"] = "PLN"
+        self.store[b["name"]] = b
         return b
 
-    def list_budgets(self, request=None, parent=None):
-        parent = parent or request.parent
-        scope = request.scope if request else ""
+    def list(self, billing_account_id, project=None):
+        prefix = f"billingAccounts/{billing_account_id}/"
         return [
             b for n, b in self.store.items()
-            if n.startswith(parent + "/") and (not scope or scope in b.budget_filter.projects)
+            if n.startswith(prefix) and (project is None or project in b["budgetFilter"].get("projects", []))
         ]
 
-    def get_budget(self, name):
+    def get(self, name):
         if name not in self.store:
-            raise gexc.NotFound("budget not found")
+            raise BudgetApiError(404, "Budget not found")
         return self.store[name]
 
-    def update_budget(self, budget, update_mask):
-        current = self.store[budget.name]
-        for path in update_mask.paths:
-            setattr(current, path, getattr(budget, path))
+    def patch(self, name, budget, update_mask):
+        self.patches.append((name, budget, update_mask))
+        current = self.store[name]
+        if update_mask == "amount":
+            current["amount"]["specifiedAmount"].update(budget["amount"]["specifiedAmount"])
+        elif update_mask == "spendCap.inputState":
+            current["spendCap"] = {"inputState": budget["spendCap"]["inputState"], "outputState": "AWAITING_NEXT_PERIOD"}
         return current
 
-    def delete_budget(self, name):
+    def delete(self, name):
         self.store.pop(name)
-
-
-class FakeBilling:
-    def __init__(self):
-        self.projects = {}
-
-    def get_project_billing_info(self, name):
-        return self.projects[name]
-
-    def update_project_billing_info(self, name, project_billing_info):
-        self.projects[name] = billing_v1.ProjectBillingInfo(
-            name=name, billing_account_name=project_billing_info.billing_account_name, billing_enabled=False
-        )
 
 
 @pytest.fixture
 def env():
-    budgets, billing = FakeBudgets(), FakeBilling()
-    svc = SpendCapService(Settings(pubsub_topic=TOPIC), budgets, billing)
-    app.dependency_overrides[get_service] = lambda: svc
-    yield TestClient(app), budgets, billing
+    budgets = FakeBudgets()
+    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets)
+    yield TestClient(app), budgets
     app.dependency_overrides.clear()
 
 
-def push(budget_id, cost, limit, ba=BA):
-    data = {"costAmount": cost, "budgetAmount": limit, "currencyCode": "PLN", "budgetDisplayName": "x"}
-    return {
-        "message": {
-            "data": base64.b64encode(json.dumps(data).encode()).decode(),
-            "attributes": {"billingAccountId": ba, "budgetId": budget_id, "schemaVersion": "1.0"},
-        }
-    }
+def create(client, **overrides):
+    return client.post(BASE, json={"project_id": "acme-prod", "service": "cloud-run", "amount": "1500.50", **overrides})
 
 
-def test_create_spend_cap(env):
-    client, budgets, _ = env
-    r = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "acme-prod", "amount": "1500.50"})
+def test_create_builds_spend_cap_budget(env):
+    client, budgets = env
+    r = create(client)
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["projects"] == ["projects/acme-prod"]
-    assert body["display_name"] == "spend-cap-acme-prod"
+    assert body["project"] == "projects/acme-prod"
+    assert body["service"] == "cloud-run"
+    assert body["service_id"] == "152E-C115-5142"
     assert body["amount"] == "1500.5"
-    assert body["alert_thresholds"] == [0.5, 0.9, 1.0]
-    assert body["enforced"] is True
+    assert body["currency_code"] == "PLN"
+    assert body["state"] == "CONFIGURED"
+    assert body["display_name"] == "spend-cap-acme-prod-cloud-run"
 
-    stored = budgets.store[body["name"]]
-    assert stored.notifications_rule.pubsub_topic == TOPIC
-    assert stored.amount.specified_amount.units == 1500
-    assert stored.amount.specified_amount.nanos == 500_000_000
-
-
-def test_create_duplicate_project_conflicts(env):
-    client, _, _ = env
-    payload = {"project_id": "acme-prod", "amount": 100}
-    assert client.post(f"/v1/billing-accounts/{BA}/spend-caps", json=payload).status_code == 201
-    assert client.post(f"/v1/billing-accounts/{BA}/spend-caps", json=payload).status_code == 409
-
-
-def test_create_without_enforcement_has_no_topic(env):
-    client, budgets, _ = env
-    r = client.post(
-        f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 10, "enforce": False}
-    )
-    assert r.json()["enforced"] is False
-    assert budgets.store[r.json()["name"]].notifications_rule.pubsub_topic == ""
+    sent = budgets.store[body["name"]]
+    assert sent["budgetFilter"] == {
+        "projects": ["projects/acme-prod"],
+        "services": [CLOUD_RUN],
+        "creditTypesTreatment": "EXCLUDE_ALL_CREDITS",
+        "calendarPeriod": "MONTH",
+    }
+    assert sent["amount"]["specifiedAmount"]["units"] == "1500"
+    assert sent["amount"]["specifiedAmount"]["nanos"] == 500_000_000
+    assert [r["thresholdPercent"] for r in sent["thresholdRules"]] == [0.5, 0.8, 1.0]
+    assert {r["spendBasis"] for r in sent["thresholdRules"]} == {"CURRENT_SPEND"}
+    assert sent["notificationsRule"] == {"enableProjectLevelRecipients": True}
 
 
-def test_enforced_create_requires_topic(env):
-    client, budgets, billing = env
-    app.dependency_overrides[get_service] = lambda: SpendCapService(Settings(pubsub_topic=None), budgets, billing)
-    r = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 10})
-    assert r.status_code == 500
-    assert "SPEND_CAP_PUBSUB_TOPIC" in r.json()["detail"]
+def test_create_passes_currency(env):
+    client, budgets = env
+    r = create(client, currency_code="EUR")
+    assert budgets.store[r.json()["name"]]["amount"]["specifiedAmount"]["currencyCode"] == "EUR"
+
+
+def test_create_duplicate_for_same_service_conflicts(env):
+    client, _ = env
+    assert create(client).status_code == 201
+    assert create(client).status_code == 409
+    assert create(client, service="gemini-api").status_code == 201
+
+
+def test_create_ignores_regular_budget_on_same_project(env):
+    client, budgets = env
+    budgets.store[f"billingAccounts/{BA}/budgets/plain"] = {
+        "name": f"billingAccounts/{BA}/budgets/plain",
+        "budgetFilter": {"projects": ["projects/acme-prod"], "services": [CLOUD_RUN]},
+    }
+    assert create(client).status_code == 201
 
 
 def test_validation(env):
-    client, _, _ = env
-    assert client.post("/v1/billing-accounts/bad/spend-caps", json={"project_id": "p", "amount": 1}).status_code == 422
-    assert client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p", "amount": 0}).status_code == 422
-    r = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p", "amount": 1, "alert_thresholds": [-1]})
-    assert r.status_code == 422
+    client, _ = env
+    assert client.post("/v1/billing-accounts/bad/spend-caps", json={"project_id": "p", "service": "cloud-run", "amount": 1}).status_code == 422
+    assert create(client, service="bigquery").status_code == 422
+    assert create(client, amount=-1).status_code == 422
+    assert create(client, currency_code="pln").status_code == 422
 
 
-def test_list_get_update_delete(env):
-    client, _, _ = env
-    created = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 100}).json()
-    base = f"/v1/billing-accounts/{BA}/spend-caps"
+def test_list_only_returns_spend_caps(env):
+    client, budgets = env
+    created = create(client).json()
+    budgets.store[f"billingAccounts/{BA}/budgets/plain"] = {
+        "name": f"billingAccounts/{BA}/budgets/plain", "budgetFilter": {}
+    }
+    assert [c["id"] for c in client.get(BASE).json()] == [created["id"]]
 
-    assert [c["id"] for c in client.get(base).json()] == [created["id"]]
-    assert client.get(f"{base}/{created['id']}").json()["amount"] == "100"
 
-    r = client.patch(f"{base}/{created['id']}", json={"amount": 250, "alert_thresholds": [1.0, 0.8], "enforce": False})
+def test_get_and_delete(env):
+    client, _ = env
+    created = create(client).json()
+    assert client.get(f"{BASE}/{created['id']}").json()["id"] == created["id"]
+    assert client.delete(f"{BASE}/{created['id']}").status_code == 204
+    assert client.get(f"{BASE}/{created['id']}").status_code == 404
+
+
+def test_regular_budget_is_not_exposed(env):
+    client, budgets = env
+    budgets.store[f"billingAccounts/{BA}/budgets/plain"] = {"name": f"billingAccounts/{BA}/budgets/plain"}
+    assert client.get(f"{BASE}/plain").status_code == 404
+    assert client.delete(f"{BASE}/plain").status_code == 404
+    assert f"billingAccounts/{BA}/budgets/plain" in budgets.store
+
+
+def test_update_amount(env):
+    client, budgets = env
+    created = create(client).json()
+    r = client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
     assert r.status_code == 200, r.text
     assert r.json()["amount"] == "250"
-    assert r.json()["alert_thresholds"] == [0.8, 1.0]
-    assert r.json()["enforced"] is False
-
-    assert client.patch(f"{base}/{created['id']}", json={}).status_code == 400
-    assert client.delete(f"{base}/{created['id']}").status_code == 204
-    assert client.get(f"{base}/{created['id']}").status_code == 404
+    name, patch, mask = budgets.patches[-1]
+    assert mask == "amount"
+    assert patch["etag"] == "e1"
+    assert "currencyCode" not in patch["amount"]["specifiedAmount"]
 
 
-def test_notification_below_limit_does_nothing(env):
-    client, _, billing = env
-    created = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 100}).json()
-    billing.projects["projects/p1"] = billing_v1.ProjectBillingInfo(billing_account_name=f"billingAccounts/{BA}", billing_enabled=True)
-
-    r = client.post("/v1/budget-notifications", json=push(created["id"], 99.99, 100))
-    assert r.json() == {"budget_id": created["id"], "exceeded": False, "disabled_projects": []}
-    assert billing.projects["projects/p1"].billing_enabled is True
+def test_lift_requires_enforced_state(env):
+    client, _ = env
+    created = create(client).json()
+    assert client.post(f"{BASE}/{created['id']}:lift").status_code == 409
 
 
-def test_notification_over_limit_disables_billing(env):
-    client, _, billing = env
-    created = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 100}).json()
-    billing.projects["projects/p1"] = billing_v1.ProjectBillingInfo(billing_account_name=f"billingAccounts/{BA}", billing_enabled=True)
-
-    r = client.post("/v1/budget-notifications", json=push(created["id"], 100.01, 100))
-    assert r.json()["disabled_projects"] == ["projects/p1"]
-    assert billing.projects["projects/p1"].billing_enabled is False
-
-    r = client.post("/v1/budget-notifications", json=push(created["id"], 120, 100))
-    assert r.json()["exceeded"] is True
-    assert r.json()["disabled_projects"] == []
+def test_lift_enforced_cap(env):
+    client, budgets = env
+    created = create(client).json()
+    budgets.store[created["name"]]["spendCap"]["outputState"] = "ENFORCED"
+    r = client.post(f"{BASE}/{created['id']}:lift")
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "AWAITING_NEXT_PERIOD"
+    _, patch, mask = budgets.patches[-1]
+    assert mask == "spendCap.inputState"
+    assert patch["spendCap"] == {"inputState": "AWAITING_NEXT_PERIOD"}
 
 
-def test_notification_ignores_unenforced_budget(env):
-    client, _, billing = env
-    created = client.post(
-        f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 100, "enforce": False}
-    ).json()
-    billing.projects["projects/p1"] = billing_v1.ProjectBillingInfo(billing_account_name=f"billingAccounts/{BA}", billing_enabled=True)
+def test_google_api_error_is_passed_through(env):
+    client, budgets = env
 
-    r = client.post("/v1/budget-notifications", json=push(created["id"], 500, 100))
-    assert r.json()["disabled_projects"] == []
-    assert billing.projects["projects/p1"].billing_enabled is True
+    def fail(*_args, **_kwargs):
+        raise BudgetApiError(403, "Permission billing.budgets.configureSpendCap denied")
 
-
-def test_notification_skips_project_moved_to_other_account(env):
-    client, _, billing = env
-    created = client.post(f"/v1/billing-accounts/{BA}/spend-caps", json={"project_id": "p1", "amount": 100}).json()
-    billing.projects["projects/p1"] = billing_v1.ProjectBillingInfo(
-        billing_account_name="billingAccounts/AAAAAA-BBBBBB-CCCCCC", billing_enabled=True
-    )
-
-    r = client.post("/v1/budget-notifications", json=push(created["id"], 500, 100))
-    assert r.json()["disabled_projects"] == []
-    assert billing.projects["projects/p1"].billing_enabled is True
-
-
-def test_notification_rejects_malformed(env):
-    client, _, _ = env
-    bad = push("b1", 1, 1)
-    bad["message"]["data"] = base64.b64encode(b"not json").decode()
-    assert client.post("/v1/budget-notifications", json=bad).status_code == 400
-    missing = push("b1", 1, 1)
-    missing["message"]["attributes"] = {}
-    assert client.post("/v1/budget-notifications", json=missing).status_code == 400
+    budgets.create = fail
+    r = create(client)
+    assert r.status_code == 403
+    assert "configureSpendCap" in r.json()["detail"]
