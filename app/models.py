@@ -19,6 +19,13 @@ SERVICE_IDS = {
     Service.vertex_ai: "C7E2-9256-1C43",
 }
 
+SERVICE_NAMES = {
+    Service.cloud_run: "Cloud Run",
+    Service.cloud_run_functions: "Cloud Run functions",
+    Service.gemini_api: "Gemini API",
+    Service.vertex_ai: "Vertex AI",
+}
+
 MAX_MONEY_UNITS = 2**63 - 1
 Amount = Annotated[Decimal, Field(ge=0, le=MAX_MONEY_UNITS, decimal_places=2)]
 

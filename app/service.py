@@ -1,12 +1,13 @@
 from decimal import Decimal
 
 from app.budgets_client import LIST_PASSES, BudgetApiError, BudgetsClient
-from app.models import SERVICE_IDS, SpendCap, SpendCapCreate, SpendCapUpdate
+from app.models import SERVICE_IDS, SERVICE_NAMES, SpendCap, SpendCapCreate, SpendCapUpdate
 
 SERVICES_BY_ID = {service_id: service for service, service_id in SERVICE_IDS.items()}
 SPEND_CAP_THRESHOLDS = [0.5, 0.8, 1.0]
 DUPLICATE_LOOKUP_PASSES = 8
 DELETE_ATTEMPTS = 3
+DEFAULT_DISPLAY_NAME_FORMAT = "spend-cap-{project_id}-{service}"
 
 
 class SpendCapError(Exception):
@@ -51,8 +52,14 @@ def _to_spend_cap(budget: dict) -> SpendCap:
 
 
 class SpendCapService:
-    def __init__(self, budgets: BudgetsClient):
+    def __init__(self, budgets: BudgetsClient, display_name_format: str = DEFAULT_DISPLAY_NAME_FORMAT):
         self.budgets = budgets
+        self.display_name_format = display_name_format
+
+    def _display_name(self, req: SpendCapCreate) -> str:
+        return self.display_name_format.format(
+            project_id=req.project_id, service=req.service.value, service_name=SERVICE_NAMES[req.service]
+        )[:60]
 
     @staticmethod
     def _budget_name(billing_account_id: str, budget_id: str) -> str:
@@ -83,7 +90,7 @@ class SpendCapService:
         if existing:
             raise self._duplicate_error(project, service, existing)
         budget = {
-            "displayName": req.display_name or f"spend-cap-{req.project_id}-{req.service.value}"[:60],
+            "displayName": req.display_name or self._display_name(req),
             "budgetFilter": {
                 "projects": [project],
                 "services": [service],

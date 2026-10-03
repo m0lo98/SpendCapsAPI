@@ -1,13 +1,17 @@
+import os
 from functools import lru_cache
 from typing import Annotated
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Path, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.audit import log_audit
 from app.budgets_client import BudgetApiError, BudgetsClient
 from app.models import SpendCap, SpendCapCreate, SpendCapUpdate
-from app.service import SpendCapError, SpendCapService
+from app.service import DEFAULT_DISPLAY_NAME_FORMAT, SpendCapError, SpendCapService
+
+load_dotenv(".env")
 
 app = FastAPI(title="Spend Caps API", version="0.2.0")
 
@@ -18,7 +22,7 @@ UPSTREAM_STATUS_OVERRIDES = {401: 502, 500: 502}
 
 @lru_cache
 def get_service() -> SpendCapService:
-    return SpendCapService(BudgetsClient())
+    return SpendCapService(BudgetsClient(), os.environ.get("DISPLAY_NAME_FORMAT", DEFAULT_DISPLAY_NAME_FORMAT))
 
 
 Service = Annotated[SpendCapService, Depends(get_service)]
