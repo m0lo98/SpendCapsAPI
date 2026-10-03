@@ -104,7 +104,8 @@ On Cloud Run the service account's project is used.
 - `ownershipScope: ALL_USERS` must be sent explicitly; omitting it returns a bare `INVALID_ARGUMENT`.
 - `PATCH` with `updateMask` returns `INVALID_ARGUMENT`; the API sends the full budget without a mask instead.
 - Reads are inconsistent: `get`/`patch` intermittently return 404 for existing budgets (retried up to 5 times),
-  and `list` can return an incomplete set, so the list endpoint and the duplicate check are best effort.
+  and `list` returns no spend caps at all in roughly half of the calls. The API merges 3 list passes, which
+  narrows but does not close the gap, so the list endpoint and the duplicate check are still best effort.
 - Error responses carry no field-level details.
 
 The official Python client (`google-cloud-billing-budgets` 1.22.0) does not expose `spendCap` yet,

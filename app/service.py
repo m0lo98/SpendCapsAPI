@@ -30,7 +30,7 @@ def _from_money(money: dict) -> Decimal:
 def _to_spend_cap(budget: dict) -> SpendCap:
     _, billing_account_id, _, budget_id = budget["name"].split("/")
     budget_filter = budget.get("budgetFilter", {})
-    service_id = budget_filter.get("services", [""])[0].removeprefix("services/")
+    service_id = (budget_filter.get("services") or [""])[0].removeprefix("services/")
     specified = budget.get("amount", {}).get("specifiedAmount")
     spend_cap = budget["spendCap"]
     return SpendCap(
@@ -38,7 +38,7 @@ def _to_spend_cap(budget: dict) -> SpendCap:
         name=budget["name"],
         billing_account_id=billing_account_id,
         display_name=budget.get("displayName", ""),
-        project=budget_filter.get("projects", [""])[0],
+        project=(budget_filter.get("projects") or [""])[0],
         service=SERVICES_BY_ID.get(service_id),
         service_id=service_id,
         amount=_from_money(specified) if specified is not None else None,

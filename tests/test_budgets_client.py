@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.budgets_client import API_ROOT, MAX_ATTEMPTS, REQUEST_TIMEOUT, BudgetApiError, BudgetsClient
+from app.budgets_client import API_ROOT, LIST_PASSES, MAX_ATTEMPTS, REQUEST_TIMEOUT, BudgetApiError, BudgetsClient
 
 
 class FakeResponse:
@@ -26,17 +26,29 @@ class FakeSession:
 
 
 def test_list_follows_pagination_and_scope():
-    session = FakeSession(
-        [
-            FakeResponse(200, {"budgets": [{"name": "a"}], "nextPageToken": "t1"}),
-            FakeResponse(200, {"budgets": [{"name": "b"}]}),
-        ]
-    )
+    pages = [
+        FakeResponse(200, {"budgets": [{"name": "a"}], "nextPageToken": "t1"}),
+        FakeResponse(200, {"budgets": [{"name": "b"}]}),
+    ]
+    session = FakeSession(pages * LIST_PASSES)
     names = [b["name"] for b in BudgetsClient(session).list("BA", project="projects/p")]
     assert names == ["a", "b"]
     assert session.calls[0][1] == f"{API_ROOT}/billingAccounts/BA/budgets"
     assert session.calls[0][2]["params"] == {"pageSize": 100, "scope": "projects/p"}
     assert session.calls[1][2]["params"]["pageToken"] == "t1"
+    assert "pageToken" not in session.calls[2][2]["params"]
+
+
+def test_list_merges_incomplete_passes():
+    session = FakeSession(
+        [
+            FakeResponse(200, {"budgets": [{"name": "plain"}]}),
+            FakeResponse(200, {"budgets": [{"name": "plain"}, {"name": "cap"}]}),
+        ]
+        + [FakeResponse(200, {})] * (LIST_PASSES - 2)
+    )
+    assert [b["name"] for b in BudgetsClient(session).list("BA")] == ["plain", "cap"]
+    assert len(session.calls) == LIST_PASSES
 
 
 def test_patch_sends_body_without_update_mask():
