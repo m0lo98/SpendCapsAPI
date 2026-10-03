@@ -53,6 +53,9 @@ must match it when given.
 `state` in responses: `CONFIGURED` (active), `ENFORCED` (usage blocked), `AWAITING_NEXT_PERIOD`
 (lifted, re-arms next month). `reconciling: true` means GCP is still applying a state change.
 
+Amount updates and lifts send the full budget with its `etag`, so a change made elsewhere (console, another
+caller) between the read and the write is never overwritten: the request fails with `409` and can be retried.
+
 ## Permissions
 
 The caller identity (the Cloud Run service account) needs:
@@ -116,7 +119,8 @@ On Cloud Run the service account's project is used.
 ## Known Preview issues (observed 2026-10-03)
 
 - `ownershipScope: ALL_USERS` must be sent explicitly; omitting it returns a bare `INVALID_ARGUMENT`.
-- `PATCH` with `updateMask` returns `INVALID_ARGUMENT`; the API sends the full budget without a mask instead.
+- `PATCH` with `updateMask` returns `INVALID_ARGUMENT`; the API sends the full budget (with `etag`) without a mask
+  instead. A stale `etag` returns `400 FAILED_PRECONDITION`, which the API maps to `409`.
 - Reads are inconsistent: `get`/`patch` intermittently return 404 for existing budgets (retried up to 5 times),
   and `list` returns no spend caps at all in roughly half of the calls. The API merges 3 list passes, which
   narrows but does not close the gap, so the list endpoint and the duplicate check are still best effort.
