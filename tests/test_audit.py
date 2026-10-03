@@ -4,7 +4,7 @@ import json
 import pytest
 from starlette.requests import Request
 
-from app.audit import UNKNOWN_CALLER, caller_email
+from app.audit import UNKNOWN_CALLER, caller_identity
 
 
 def id_token(claims: dict) -> str:
@@ -37,5 +37,5 @@ def request_with(headers: dict) -> Request:
     ],
     ids=["email", "sub-fallback", "serverless-header-first", "missing", "basic", "opaque", "bad-base64", "not-object"],
 )
-def test_caller_email(headers, expected):
-    assert caller_email(request_with(headers)) == expected
+def test_caller_identity(headers, expected):
+    assert caller_identity(request_with(headers)) == expected

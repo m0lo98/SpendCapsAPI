@@ -6,7 +6,7 @@ from fastapi import Request
 UNKNOWN_CALLER = "unknown"
 
 
-def caller_email(request: Request) -> str:
+def caller_identity(request: Request) -> str:
     # Cloud Run IAM verifies the ID token and forwards it with the signature stripped, so only the claims are read.
     for header in ("x-serverless-authorization", "authorization"):
         scheme, _, token = request.headers.get(header, "").partition(" ")
@@ -28,7 +28,7 @@ def log_audit(request: Request, action: str, billing_account_id: str, spend_cap_
         "severity": "NOTICE",
         "message": f"spend cap {action}: {billing_account_id}/{spend_cap_id}",
         "audit": {
-            "caller": caller_email(request),
+            "caller": caller_identity(request),
             "action": action,
             "billing_account_id": billing_account_id,
             "spend_cap_id": spend_cap_id,
