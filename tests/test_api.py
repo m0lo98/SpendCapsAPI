@@ -253,7 +253,7 @@ def audit_entries(capsys) -> list[dict]:
 
 def test_mutations_are_audited_with_caller(env, capsys):
     client, budgets = env
-    client.headers["Authorization"] = f"Bearer {id_token({'email': 'ops@fotc.com'})}"
+    client.headers["Authorization"] = f"Bearer {id_token({'email': 'ops@example.org'})}"
     created = create(client).json()
     client.patch(f"{BASE}/{created['id']}", json={"amount": 250})
     budgets.store[created["name"]]["spendCap"]["outputState"] = "ENFORCED"
@@ -262,7 +262,7 @@ def test_mutations_are_audited_with_caller(env, capsys):
 
     entries = audit_entries(capsys)
     assert [e["audit"]["action"] for e in entries] == ["create", "update_amount", "lift", "delete"]
-    assert {e["audit"]["caller"] for e in entries} == {"ops@fotc.com"}
+    assert {e["audit"]["caller"] for e in entries} == {"ops@example.org"}
     assert {e["audit"]["spend_cap_id"] for e in entries} == {created["id"]}
     assert {e["severity"] for e in entries} == {"NOTICE"}
     assert entries[0]["audit"] | {"caller": None} == {

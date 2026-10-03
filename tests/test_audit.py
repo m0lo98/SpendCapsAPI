@@ -20,14 +20,14 @@ def request_with(headers: dict) -> Request:
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
-        ({"Authorization": f"Bearer {id_token({'email': 'ops@fotc.com', 'sub': '1'})}"}, "ops@fotc.com"),
+        ({"Authorization": f"Bearer {id_token({'email': 'ops@example.org', 'sub': '1'})}"}, "ops@example.org"),
         ({"Authorization": f"Bearer {id_token({'sub': '1234'})}"}, "1234"),
         (
             {
-                "X-Serverless-Authorization": f"Bearer {id_token({'email': 'iap@fotc.com'})}",
-                "Authorization": f"Bearer {id_token({'email': 'custom@fotc.com'})}",
+                "X-Serverless-Authorization": f"Bearer {id_token({'email': 'iap@example.org'})}",
+                "Authorization": f"Bearer {id_token({'email': 'custom@example.org'})}",
             },
-            "iap@fotc.com",
+            "iap@example.org",
         ),
         ({}, UNKNOWN_CALLER),
         ({"Authorization": "Basic abc"}, UNKNOWN_CALLER),
