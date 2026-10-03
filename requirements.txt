@@ -1,0 +1,4 @@
+fastapi==0.142.2
+uvicorn==0.54.0
+google-cloud-billing==1.21.0
+google-cloud-billing-budgets==1.22.0
