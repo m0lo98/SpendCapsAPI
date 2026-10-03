@@ -112,35 +112,27 @@ def test_create_passes_currency(env):
     assert budgets.store[r.json()["name"]]["amount"]["specifiedAmount"]["currencyCode"] == "EUR"
 
 
-def test_create_uses_display_name_format():
+def create_with_display_name_format(display_name_format, **overrides):
     budgets = FakeBudgets()
-    app.dependency_overrides[get_service] = lambda: SpendCapService(
-        budgets, "[SpendCaps] [{service_name}] {project_id}"
-    )
+    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets, display_name_format)
     try:
-        r = create(TestClient(app))
+        return create(TestClient(app), **overrides)
     finally:
         app.dependency_overrides.clear()
+
+
+def test_create_uses_display_name_format():
+    r = create_with_display_name_format("[SpendCaps] [{service_name}] {project_id}")
     assert r.json()["display_name"] == "[SpendCaps] [Cloud Run] acme-prod"
 
 
 def test_create_truncates_formatted_display_name():
-    budgets = FakeBudgets()
-    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets, "{project_id} " * 7)
-    try:
-        r = create(TestClient(app))
-    finally:
-        app.dependency_overrides.clear()
+    r = create_with_display_name_format("{project_id} " * 7)
     assert r.json()["display_name"] == ("acme-prod " * 7)[:60]
 
 
 def test_create_explicit_display_name_overrides_format():
-    budgets = FakeBudgets()
-    app.dependency_overrides[get_service] = lambda: SpendCapService(budgets, "[SpendCaps] {project_id}")
-    try:
-        r = create(TestClient(app), display_name="ACME cap")
-    finally:
-        app.dependency_overrides.clear()
+    r = create_with_display_name_format("[SpendCaps] {project_id}", display_name="ACME cap")
     assert r.json()["display_name"] == "ACME cap"
 
 
